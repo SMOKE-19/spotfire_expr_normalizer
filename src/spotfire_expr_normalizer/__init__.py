@@ -1,0 +1,48 @@
+"""Spotfire expression normalizer for DuckDB SQL."""
+
+from .catalog import catalog_db_path, unsupported_functions_markdown_path
+from .normalizer import (
+    DerivedExpression,
+    ExpressionCompatibilityError,
+    SUPPORTED_SPOTFIRE_FUNCTIONS,
+    ExpressionCompileResult,
+    build_expression_layers,
+    build_raw_expressions,
+    canonicalize_expressions,
+    compile_expression_file,
+    extract_identifier_tokens,
+    load_duckdb_layered_expression_yaml,
+    load_expression_items_from_csv,
+    load_expression_items_from_yaml,
+    normalize_expression,
+    normalize_spotfire_expression_for_duckdb,
+    pretty_format_expression,
+    validate_expression_compatibility,
+    write_duckdb_layered_expression_yaml,
+    write_layered_expression_yaml,
+    write_unsupported_expression_yaml,
+)
+
+__all__ = [
+    "DerivedExpression",
+    "ExpressionCompatibilityError",
+    "ExpressionCompileResult",
+    "SUPPORTED_SPOTFIRE_FUNCTIONS",
+    "build_expression_layers",
+    "build_raw_expressions",
+    "canonicalize_expressions",
+    "catalog_db_path",
+    "compile_expression_file",
+    "extract_identifier_tokens",
+    "load_duckdb_layered_expression_yaml",
+    "load_expression_items_from_csv",
+    "load_expression_items_from_yaml",
+    "normalize_expression",
+    "normalize_spotfire_expression_for_duckdb",
+    "pretty_format_expression",
+    "unsupported_functions_markdown_path",
+    "validate_expression_compatibility",
+    "write_duckdb_layered_expression_yaml",
+    "write_layered_expression_yaml",
+    "write_unsupported_expression_yaml",
+]

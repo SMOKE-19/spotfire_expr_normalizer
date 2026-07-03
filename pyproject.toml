@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spotfire-expr-normalizer"
+version = "0.1.0"
+description = "Normalize Spotfire expressions into DuckDB-compatible SQL."
+requires-python = ">=3.10"
+dependencies = [
+    "duckdb>=1.5.0,<2.0.0",
+    "PyYAML>=6.0.3,<7.0.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["spotfire_expr_normalizer*"]
+
+[tool.setuptools.package-data]
+"spotfire_expr_normalizer.data" = ["*.sqlite", "*.md"]
