@@ -60,6 +60,7 @@ SUPPORTED_SPOTFIRE_FUNCTIONS = {
     "lastvalueformax",
     "lastvalueformin",
     "lav",
+    "len",
     "lif",
     "lof",
     "longinteger",
@@ -91,6 +92,7 @@ SUPPORTED_SPOTFIRE_FUNCTIONS = {
     "randbetween",
     "rankreal",
     "real",
+    "right",
     "rxextract",
     "rxreplace",
     "seconds",
@@ -216,6 +218,150 @@ class ExpressionCompileResult:
     expression_rewrite_count: int
 
 
+@dataclass(slots=True)
+class DuckDbLayeredExpressionPrepareResult:
+    """Normalized DuckDB layered expression contract for downstream executors."""
+
+    expressions: list[DerivedExpression]
+    duckdb_layered_yaml_path: Path
+    source_path: Path
+    source_format: str
+    layered_yaml_path: Path | None
+    expression_count_before: int
+    expression_count_after: int
+    expression_rewrite_count: int
+    compiled: bool
+
+
+@dataclass(slots=True)
+class PolarsExpression:
+    """Single derived expression and its Polars expression source."""
+
+    name: str
+    expression: str
+    polars_expression: str
+    dependencies: list[str]
+
+
+@dataclass(slots=True)
+class PolarsExpressionCompileResult:
+    """Polars expression file compilation outputs."""
+
+    expressions: list[PolarsExpression]
+    layered_yaml_path: Path
+    polars_layered_yaml_path: Path
+    expression_count_before: int
+    expression_count_after: int
+    expression_rewrite_count: int
+
+
+@dataclass(slots=True)
+class PolarsLayeredExpressionPrepareResult:
+    """Normalized Polars layered expression contract for downstream executors."""
+
+    expressions: list[PolarsExpression]
+    polars_layered_yaml_path: Path
+    source_path: Path
+    source_format: str
+    layered_yaml_path: Path | None
+    expression_count_before: int
+    expression_count_after: int
+    expression_rewrite_count: int
+    compiled: bool
+
+
+def prepare_duckdb_layered_expression(
+    source_path: str | Path,
+    *,
+    source_format: str | None = None,
+    result_name_field: str | None = None,
+    sql_expression_field: str | None = None,
+) -> DuckDbLayeredExpressionPrepareResult:
+    """Prepare CSV, Spotfire layered YAML, or DuckDB layered YAML for execution.
+
+    CSV and Spotfire YAML inputs are compiled into ``*.duckdb.layered.yaml``.
+    DuckDB layered YAML inputs are validated and loaded without recompilation.
+    """
+    path = Path(source_path)
+    normalized_format = _infer_expression_source_format(path, source_format)
+
+    if normalized_format == "duckdb_layered_yaml":
+        expressions = load_duckdb_layered_expression_yaml(path)
+        return DuckDbLayeredExpressionPrepareResult(
+            expressions=expressions,
+            duckdb_layered_yaml_path=path,
+            source_path=path,
+            source_format=normalized_format,
+            layered_yaml_path=None,
+            expression_count_before=len(expressions),
+            expression_count_after=len(expressions),
+            expression_rewrite_count=0,
+            compiled=False,
+        )
+
+    compile_result = compile_expression_file(
+        path,
+        source_format=normalized_format,
+        result_name_field=result_name_field,
+        sql_expression_field=sql_expression_field,
+    )
+    return DuckDbLayeredExpressionPrepareResult(
+        expressions=compile_result.expressions,
+        duckdb_layered_yaml_path=compile_result.duckdb_layered_yaml_path,
+        source_path=path,
+        source_format=normalized_format,
+        layered_yaml_path=compile_result.layered_yaml_path,
+        expression_count_before=compile_result.expression_count_before,
+        expression_count_after=compile_result.expression_count_after,
+        expression_rewrite_count=compile_result.expression_rewrite_count,
+        compiled=True,
+    )
+
+
+def prepare_polars_layered_expression(
+    source_path: str | Path,
+    *,
+    source_format: str | None = None,
+    result_name_field: str | None = None,
+    sql_expression_field: str | None = None,
+) -> PolarsLayeredExpressionPrepareResult:
+    """Prepare CSV, Spotfire layered YAML, or Polars layered YAML for execution."""
+    path = Path(source_path)
+    normalized_format = _infer_polars_expression_source_format(path, source_format)
+
+    if normalized_format == "polars_layered_yaml":
+        expressions = load_polars_layered_expression_yaml(path)
+        return PolarsLayeredExpressionPrepareResult(
+            expressions=expressions,
+            polars_layered_yaml_path=path,
+            source_path=path,
+            source_format=normalized_format,
+            layered_yaml_path=None,
+            expression_count_before=len(expressions),
+            expression_count_after=len(expressions),
+            expression_rewrite_count=0,
+            compiled=False,
+        )
+
+    compile_result = compile_polars_expression_file(
+        path,
+        source_format=normalized_format,
+        result_name_field=result_name_field,
+        sql_expression_field=sql_expression_field,
+    )
+    return PolarsLayeredExpressionPrepareResult(
+        expressions=compile_result.expressions,
+        polars_layered_yaml_path=compile_result.polars_layered_yaml_path,
+        source_path=path,
+        source_format=normalized_format,
+        layered_yaml_path=compile_result.layered_yaml_path,
+        expression_count_before=compile_result.expression_count_before,
+        expression_count_after=compile_result.expression_count_after,
+        expression_rewrite_count=compile_result.expression_rewrite_count,
+        compiled=True,
+    )
+
+
 def compile_expression_file(
     source_path: str | Path,
     *,
@@ -240,8 +386,8 @@ def compile_expression_file(
     raw_expressions = build_raw_expressions(raw_items)
     canonicalized, expression_rewrite_count = canonicalize_expressions(raw_expressions)
     layers = build_expression_layers(canonicalized)
-    layered_yaml_path = path.with_suffix(".layered.yaml")
-    duckdb_layered_yaml_path = path.with_suffix(".duckdb.layered.yaml")
+    layered_yaml_path = _layered_yaml_path_for_source(path)
+    duckdb_layered_yaml_path = _duckdb_layered_yaml_path_for_source(path)
     write_layered_expression_yaml(layered_yaml_path, layers)
     write_duckdb_layered_expression_yaml(duckdb_layered_yaml_path, layers)
     validate_expression_compatibility(canonicalized, unsupported_yaml_path=path.with_suffix(".unsupported.yaml"))
@@ -253,6 +399,155 @@ def compile_expression_file(
         expression_count_after=len(canonicalized),
         expression_rewrite_count=expression_rewrite_count,
     )
+
+
+def compile_polars_expression_file(
+    source_path: str | Path,
+    *,
+    source_format: str,
+    result_name_field: str | None = None,
+    sql_expression_field: str | None = None,
+) -> PolarsExpressionCompileResult:
+    """Compile Spotfire expression CSV/YAML into human and Polars layered YAML files."""
+    path = Path(source_path)
+    normalized_format = source_format.strip().lower()
+    if normalized_format == "csv":
+        raw_items = load_expression_items_from_csv(
+            path,
+            result_name_field=result_name_field,
+            sql_expression_field=sql_expression_field,
+        )
+    elif normalized_format == "yaml":
+        raw_items = load_expression_items_from_yaml(path)
+    else:
+        raise ValueError(f"Unsupported expression source format: {source_format}")
+
+    raw_expressions = build_raw_expressions(raw_items)
+    canonicalized, expression_rewrite_count = canonicalize_expressions(raw_expressions)
+    layers = build_expression_layers(canonicalized)
+    polars_layers = [
+        [
+            PolarsExpression(
+                name=item.name,
+                expression=item.expression,
+                polars_expression=normalize_expression_for_polars(item.expression),
+                dependencies=list(item.dependencies),
+            )
+            for item in layer_items
+        ]
+        for layer_items in layers
+    ]
+    layered_yaml_path = _layered_yaml_path_for_source(path)
+    polars_layered_yaml_path = _polars_layered_yaml_path_for_source(path)
+    write_layered_expression_yaml(layered_yaml_path, layers)
+    write_polars_layered_expression_yaml(polars_layered_yaml_path, polars_layers)
+    validate_expression_compatibility(canonicalized, unsupported_yaml_path=path.with_suffix(".unsupported.yaml"))
+    return PolarsExpressionCompileResult(
+        expressions=load_polars_layered_expression_yaml(polars_layered_yaml_path),
+        layered_yaml_path=layered_yaml_path,
+        polars_layered_yaml_path=polars_layered_yaml_path,
+        expression_count_before=len(raw_expressions),
+        expression_count_after=len(canonicalized),
+        expression_rewrite_count=expression_rewrite_count,
+    )
+
+
+def _infer_expression_source_format(path: Path, source_format: str | None) -> str:
+    if source_format is not None:
+        normalized = source_format.strip().lower().replace("-", "_")
+        if normalized in {"yaml", "yml"} and path.suffix.lower() in {".yaml", ".yml"}:
+            return "duckdb_layered_yaml" if _is_duckdb_layered_expression_yaml(path) else "yaml"
+        aliases = {
+            "csv": "csv",
+            "yaml": "yaml",
+            "yml": "yaml",
+            "layered_yaml": "yaml",
+            "spotfire_layered_yaml": "yaml",
+            "duckdb": "duckdb_layered_yaml",
+            "duckdb_yaml": "duckdb_layered_yaml",
+            "duckdb_layered": "duckdb_layered_yaml",
+            "duckdb_layered_yaml": "duckdb_layered_yaml",
+        }
+        try:
+            return aliases[normalized]
+        except KeyError as exc:
+            raise ValueError(f"Unsupported expression source format: {source_format}") from exc
+
+    if path.suffix.lower() == ".csv":
+        return "csv"
+    if path.suffix.lower() in {".yaml", ".yml"}:
+        return "duckdb_layered_yaml" if _is_duckdb_layered_expression_yaml(path) else "yaml"
+    raise ValueError(f"Cannot infer expression source format from path: {path}")
+
+
+def _infer_polars_expression_source_format(path: Path, source_format: str | None) -> str:
+    if source_format is not None:
+        normalized = source_format.strip().lower().replace("-", "_")
+        if normalized in {"yaml", "yml"} and path.suffix.lower() in {".yaml", ".yml"}:
+            return "polars_layered_yaml" if _is_polars_layered_expression_yaml(path) else "yaml"
+        aliases = {
+            "csv": "csv",
+            "yaml": "yaml",
+            "yml": "yaml",
+            "layered_yaml": "yaml",
+            "spotfire_layered_yaml": "yaml",
+            "polars": "polars_layered_yaml",
+            "polars_yaml": "polars_layered_yaml",
+            "polars_layered": "polars_layered_yaml",
+            "polars_layered_yaml": "polars_layered_yaml",
+        }
+        try:
+            return aliases[normalized]
+        except KeyError as exc:
+            raise ValueError(f"Unsupported expression source format: {source_format}") from exc
+
+    if path.suffix.lower() == ".csv":
+        return "csv"
+    if path.suffix.lower() in {".yaml", ".yml"}:
+        return "polars_layered_yaml" if _is_polars_layered_expression_yaml(path) else "yaml"
+    raise ValueError(f"Cannot infer expression source format from path: {path}")
+
+
+def _layered_yaml_path_for_source(path: Path) -> Path:
+    if path.name.endswith(".layered.yaml"):
+        return path
+    return path.with_suffix(".layered.yaml")
+
+
+def _duckdb_layered_yaml_path_for_source(path: Path) -> Path:
+    if path.name.endswith(".duckdb.layered.yaml"):
+        return path
+    if path.name.endswith(".layered.yaml"):
+        return path.with_name(path.name.removesuffix(".layered.yaml") + ".duckdb.layered.yaml")
+    return path.with_suffix(".duckdb.layered.yaml")
+
+
+def _polars_layered_yaml_path_for_source(path: Path) -> Path:
+    if path.name.endswith(".polars.layered.yaml"):
+        return path
+    if path.name.endswith(".layered.yaml"):
+        return path.with_name(path.name.removesuffix(".layered.yaml") + ".polars.layered.yaml")
+    return path.with_suffix(".polars.layered.yaml")
+
+
+def _is_duckdb_layered_expression_yaml(path: Path) -> bool:
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except OSError:
+        raise
+    except yaml.YAMLError:
+        return False
+    return isinstance(payload, dict) and payload.get("format") == "duckdb_layered_expression"
+
+
+def _is_polars_layered_expression_yaml(path: Path) -> bool:
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except OSError:
+        raise
+    except yaml.YAMLError:
+        return False
+    return isinstance(payload, dict) and payload.get("format") == "polars_layered_expression"
 
 
 def build_raw_expressions(raw_items: list[tuple[str, str]]) -> list[DerivedExpression]:
@@ -434,6 +729,31 @@ def write_duckdb_layered_expression_yaml(path: Path, layers: list[list[DerivedEx
     return path
 
 
+def write_polars_layered_expression_yaml(path: Path, layers: list[list[PolarsExpression]]) -> Path:
+    """Write the Polars execution contract consumed by Polars-based executors."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "format": "polars_layered_expression",
+        "layers": [
+            {
+                "layer_number": layer_index,
+                "expressions": [
+                    {
+                        "column_name": item.name,
+                        "dependencies": list(item.dependencies),
+                        "polars_expr": item.polars_expression,
+                        "source_expression": item.expression,
+                    }
+                    for item in layer_items
+                ],
+            }
+            for layer_index, layer_items in enumerate(layers, start=1)
+        ],
+    }
+    path.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    return path
+
+
 def load_duckdb_layered_expression_yaml(path: str | Path) -> list[DerivedExpression]:
     yaml_path = Path(path)
     payload = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
@@ -468,6 +788,43 @@ def load_duckdb_layered_expression_yaml(path: str | Path) -> list[DerivedExpress
             )
     if not expressions:
         raise ValueError(f"DuckDB layered expression YAML is empty: {yaml_path}")
+    return expressions
+
+
+def load_polars_layered_expression_yaml(path: str | Path) -> list[PolarsExpression]:
+    yaml_path = Path(path)
+    payload = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("format") != "polars_layered_expression":
+        raise ValueError(f"Polars layered expression YAML expected: {yaml_path}")
+    raw_layers = payload.get("layers")
+    if not isinstance(raw_layers, list):
+        raise ValueError(f"Polars layered expression YAML must contain layers: {yaml_path}")
+    expressions: list[PolarsExpression] = []
+    for raw_layer in raw_layers:
+        if not isinstance(raw_layer, dict):
+            continue
+        raw_items = raw_layer.get("expressions")
+        if not isinstance(raw_items, list):
+            continue
+        for raw_item in raw_items:
+            if not isinstance(raw_item, dict):
+                continue
+            name = str(raw_item.get("column_name") or "").strip()
+            polars_expr = str(raw_item.get("polars_expr") or "").strip()
+            source_expression = str(raw_item.get("source_expression") or polars_expr).strip()
+            dependencies = [str(item) for item in raw_item.get("dependencies") or []]
+            if not name or not polars_expr:
+                continue
+            expressions.append(
+                PolarsExpression(
+                    name=name,
+                    expression=source_expression,
+                    polars_expression=polars_expr,
+                    dependencies=dependencies,
+                )
+            )
+    if not expressions:
+        raise ValueError(f"Polars layered expression YAML is empty: {yaml_path}")
     return expressions
 
 
@@ -643,9 +1000,673 @@ def normalize_spotfire_expression_for_duckdb(expression: str) -> str:
     return normalize_expression(expression)
 
 
+def normalize_expression_for_polars(expression: str) -> str:
+    """Normalize a Spotfire-style expression into a Polars expression source string."""
+    return _rewrite_expression_for_polars(_strip_spotfire_line_comments(expression))
+
+
+def normalize_spotfire_expression_for_polars(expression: str) -> str:
+    """Normalize a Spotfire-style expression into Polars-compatible expression source."""
+    return normalize_expression_for_polars(expression)
+
+
 def _normalize_logic_key(expression: str) -> str:
     expression = _strip_spotfire_line_comments(expression)
     return re.sub(r"\s+", " ", expression).strip().lower()
+
+
+def _rewrite_expression_for_polars(expression: str) -> str:
+    expr = _strip_outer_parentheses(expression.strip())
+    if not expr:
+        return "pl.lit(None)"
+    if expr.startswith("'") and expr.endswith("'"):
+        return f"pl.lit({_python_string_literal(_strip_sql_string_literal(expr) or '')})"
+    if expr.startswith('"') and expr.endswith('"'):
+        return f"pl.lit({_python_string_literal(expr[1:-1].replace('\"\"', '\"'))})"
+    if expr.lower() == "null":
+        return "pl.lit(None)"
+    if expr.lower() == "true":
+        return "pl.lit(True)"
+    if expr.lower() == "false":
+        return "pl.lit(False)"
+    if _parse_numeric_literal(expr) is not None:
+        return expr
+    if expr[:4].lower() == "case" and _word_at_end(expr, "end"):
+        return _rewrite_case_expression_for_polars(expr)
+
+    split = _split_top_level_word_operator(expr, "or")
+    if split is not None:
+        left, right = split
+        return f"({_rewrite_expression_for_polars(left)} | {_rewrite_expression_for_polars(right)})"
+    split = _split_top_level_word_operator(expr, "and")
+    if split is not None:
+        left, right = split
+        return f"({_rewrite_expression_for_polars(left)} & {_rewrite_expression_for_polars(right)})"
+    not_tail = _strip_leading_word(expr, "not")
+    if not_tail is not None:
+        return f"(~{_rewrite_expression_for_polars(not_tail)})"
+
+    split = _split_top_level_word_operator(expr, "in")
+    if split is not None:
+        left, right = split
+        return f"{_rewrite_expression_for_polars(left)}.is_in({_rewrite_polars_list_literal(right)})"
+    split = _split_top_level_symbol_operator(expr, ["~=", "<=", ">=", "<>", "=", "<", ">"])
+    if split is not None:
+        left, operator, right = split
+        if operator == "~=":
+            return f"{_rewrite_expression_for_polars(left)}.str.contains({_polars_plain_literal(right)}, literal=True)"
+        polars_operator = "==" if operator == "=" else "!=" if operator == "<>" else operator
+        return f"({_rewrite_expression_for_polars(left)} {polars_operator} {_rewrite_expression_for_polars(right)})"
+
+    concat_parts = _split_top_level_symbol_chain(expr, "&")
+    if concat_parts is not None:
+        return "pl.concat_str([" + ", ".join(_rewrite_expression_for_polars(part) for part in concat_parts) + "])"
+    split = _split_top_level_symbol_operator(expr, ["+", "-"], scan_right=True)
+    if split is not None:
+        left, operator, right = split
+        return f"({_rewrite_expression_for_polars(left)} {operator} {_rewrite_expression_for_polars(right)})"
+    split = _split_top_level_symbol_operator(expr, ["*", "/"], scan_right=True)
+    if split is not None:
+        left, operator, right = split
+        return f"({_rewrite_expression_for_polars(left)} {operator} {_rewrite_expression_for_polars(right)})"
+
+    function_result = _rewrite_polars_function_expression(expr)
+    if function_result is not None:
+        return function_result
+
+    if expr.startswith("["):
+        identifier, end_index = _read_bracket_identifier(expr, 0)
+        if end_index == len(expr):
+            return f"pl.col({_python_string_literal(identifier)})"
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", expr) and expr.lower() not in SQL_KEYWORDS:
+        return f"pl.col({_python_string_literal(expr)})"
+    return expr
+
+
+def _rewrite_polars_function_expression(expression: str) -> str | None:
+    if not expression or not (expression[0].isalpha() or expression[0] == "_"):
+        return None
+    function_name, cursor = _read_identifier(expression, 0)
+    while cursor < len(expression) and expression[cursor].isspace():
+        cursor += 1
+    if cursor >= len(expression) or expression[cursor] != "(":
+        return None
+    inner_text, end_index = _read_parenthesized(expression, cursor)
+    over_clause, final_index = _read_window_over_clause(expression, end_index)
+    if final_index != len(expression):
+        return None
+    raw_args = _split_top_level_arguments(inner_text)
+    lowered = function_name.lower()
+    if lowered == "cast" and len(raw_args) == 1:
+        cast_match = re.match(
+            r"^(?P<value>.+?)\s+as\s+(?P<type>[A-Za-z][A-Za-z0-9_(), ]*)$",
+            raw_args[0],
+            flags=re.IGNORECASE,
+        )
+        if cast_match:
+            row_expr = (
+                f"{_rewrite_expression_for_polars(cast_match.group('value').strip())}"
+                f".cast({_normalize_polars_cast_type(cast_match.group('type'))})"
+            )
+            return _apply_polars_over(row_expr, over_clause) if over_clause is not None else row_expr
+    args = [_rewrite_expression_for_polars(arg) for arg in raw_args]
+    row_expr = _rewrite_polars_function_call(lowered, args, raw_args)
+    if over_clause is not None:
+        return _apply_polars_over(row_expr, over_clause)
+    if lowered in DEFAULT_WINDOW_AGGREGATES:
+        return row_expr
+    return row_expr
+
+
+def _rewrite_polars_function_call(lowered: str, args: list[str], raw_args: list[str]) -> str:
+    cast_target = _polars_function_cast_target(lowered)
+    if cast_target is not None and len(args) == 1:
+        return f"{args[0]}.cast({cast_target})"
+    if lowered == "if" and len(args) == 3:
+        return f"pl.when({args[0]}).then({args[1]}).otherwise({args[2]})"
+    if lowered == "abs" and len(args) == 1:
+        return f"{args[0]}.abs()"
+    if lowered in {"sum", "avg", "average", "min", "max", "median"} and len(args) == 1:
+        method = "mean" if lowered in {"avg", "average"} else lowered
+        return f"{args[0]}.{method}()"
+    if lowered == "firstvalidafter" and len(args) == 1:
+        return f"{args[0]}.backward_fill()"
+    if lowered == "lastvalidbefore" and len(args) == 1:
+        return f"{args[0]}.forward_fill()"
+    if lowered == "count" and len(args) == 1:
+        return f"{args[0]}.count()"
+    if lowered == "countbig" and len(args) == 1:
+        return f"{args[0]}.count()"
+    if lowered == "uniquecount" and len(args) == 1:
+        return f"{args[0]}.n_unique()"
+    if lowered == "percentile" and len(args) == 2:
+        return f"{args[0]}.quantile({_normalize_percentile_argument(raw_args[1])}, interpolation='linear')"
+    if lowered == "p10" and len(args) == 1:
+        return f"{args[0]}.quantile(0.1, interpolation='linear')"
+    if lowered == "p90" and len(args) == 1:
+        return f"{args[0]}.quantile(0.9, interpolation='linear')"
+    if lowered == "q1" and len(args) == 1:
+        return f"{args[0]}.quantile(0.25, interpolation='linear')"
+    if lowered == "q3" and len(args) == 1:
+        return f"{args[0]}.quantile(0.75, interpolation='linear')"
+    if lowered == "iqr" and len(args) == 1:
+        return f"({args[0]}.quantile(0.75, interpolation='linear') - {args[0]}.quantile(0.25, interpolation='linear'))"
+    if lowered == "lif" and len(args) == 1:
+        return (
+            f"({args[0]}.quantile(0.25, interpolation='linear') - 1.5 * "
+            f"({args[0]}.quantile(0.75, interpolation='linear') - {args[0]}.quantile(0.25, interpolation='linear')))"
+        )
+    if lowered == "uif" and len(args) == 1:
+        return (
+            f"({args[0]}.quantile(0.75, interpolation='linear') + 1.5 * "
+            f"({args[0]}.quantile(0.75, interpolation='linear') - {args[0]}.quantile(0.25, interpolation='linear')))"
+        )
+    if lowered == "lof" and len(args) == 1:
+        return (
+            f"({args[0]}.quantile(0.25, interpolation='linear') - 3.0 * "
+            f"({args[0]}.quantile(0.75, interpolation='linear') - {args[0]}.quantile(0.25, interpolation='linear')))"
+        )
+    if lowered == "uof" and len(args) == 1:
+        return (
+            f"({args[0]}.quantile(0.75, interpolation='linear') + 3.0 * "
+            f"({args[0]}.quantile(0.75, interpolation='linear') - {args[0]}.quantile(0.25, interpolation='linear')))"
+        )
+    if lowered == "lav" and len(args) == 1:
+        return f"{args[0]}.filter({args[0]} >= {_polars_lif_expr(args[0])}).min()"
+    if lowered == "uav" and len(args) == 1:
+        return f"{args[0]}.filter({args[0]} <= {_polars_uif_expr(args[0])}).max()"
+    if lowered == "outliers" and len(args) == 1:
+        return f"{args[0]}.filter({_polars_outlier_predicate(args[0])}).count()"
+    if lowered == "pctoutliers" and len(args) == 1:
+        return f"({args[0]}.filter({_polars_outlier_predicate(args[0])}).count() / {args[0]}.count())"
+    if lowered == "meandeviation" and len(args) == 1:
+        return f"({args[0]} - {args[0]}.mean()).abs().mean()"
+    if lowered == "medianabsolutedeviation" and len(args) == 1:
+        return f"({args[0]} - {args[0]}.median()).abs().median()"
+    if lowered == "trimmedmean" and len(args) == 2:
+        lower = _normalize_trim_tail_fraction(raw_args[1])
+        upper = f"1 - {lower}"
+        return (
+            f"{args[0]}.filter(({args[0]} >= {args[0]}.quantile({lower}, interpolation='linear')) & "
+            f"({args[0]} <= {args[0]}.quantile({upper}, interpolation='linear'))).mean()"
+        )
+    if lowered == "var" and len(args) == 1:
+        return f"{args[0]}.var()"
+    if lowered == "covariance" and len(args) == 2:
+        return f"pl.cov({args[0]}, {args[1]})"
+    if lowered == "weightedaverage" and len(args) == 2:
+        return f"(({args[0]} * {args[1]}).sum() / {args[1]}.sum())"
+    if lowered == "mostcommon" and len(args) == 1:
+        return f"{args[0]}.mode().first()"
+    if lowered == "uniqueconcatenate" and len(args) == 1:
+        return f"{args[0]}.cast(pl.String).unique().implode().list.join(',')"
+    if lowered in {"valueformax", "lastvalueformax"} and len(args) == 2:
+        return f"{args[0]}.sort_by({args[1]}).last()"
+    if lowered in {"valueformin", "lastvalueformin"} and len(args) == 2:
+        return f"{args[0]}.sort_by({args[1]}).first()"
+    if lowered == "percent" and len(args) == 2:
+        return f"pl.when(({args[1]}) == 0).then(pl.lit(None)).otherwise(({args[0]}) / ({args[1]}))"
+    if lowered == "geometricmean" and len(args) == 1:
+        return f"{args[0]}.log().mean().exp()"
+    if lowered == "stderr" and len(args) == 1:
+        return f"({args[0]}.std() / {args[0]}.count().sqrt())"
+    if lowered == "l95" and len(args) == 1:
+        return f"({args[0]}.mean() - 1.96 * {args[0]}.std() / {args[0]}.count().sqrt())"
+    if lowered == "u95" and len(args) == 1:
+        return f"({args[0]}.mean() + 1.96 * {args[0]}.std() / {args[0]}.count().sqrt())"
+    if lowered == "nthlargest" and len(args) == 2:
+        return f"{args[0]}.sort(descending=True).gather(({args[1]}) - 1).first()"
+    if lowered == "nthsmallest" and len(args) == 2:
+        return f"{args[0]}.sort().gather(({args[1]}) - 1).first()"
+    if lowered == "isnull" and len(args) == 1:
+        return f"{args[0]}.is_null()"
+    if lowered == "sn" and len(args) == 2:
+        return f"{args[0]}.fill_null({args[1]})"
+    if lowered == "parsereal" and len(args) == 1:
+        return f"{args[0]}.cast(pl.Float64)"
+    if lowered == "parsedate" and len(args) == 1:
+        return f"{args[0]}.cast(pl.Date)"
+    if lowered == "parsedate" and len(args) >= 2:
+        return f"{args[0]}.str.strptime(pl.Date, format={_polars_plain_literal(raw_args[1])}, strict=False)"
+    if lowered == "parsedatetime" and len(args) == 1:
+        return f"{args[0]}.cast(pl.Datetime)"
+    if lowered == "parsedatetime" and len(args) >= 2:
+        return f"{args[0]}.str.strptime(pl.Datetime, format={_polars_plain_literal(raw_args[1])}, strict=False)"
+    if lowered == "parsetime" and len(args) == 1:
+        return f"{args[0]}.cast(pl.Time)"
+    if lowered == "parsetime" and len(args) >= 2:
+        return f"{args[0]}.str.strptime(pl.Time, format={_polars_plain_literal(raw_args[1])}, strict=False)"
+    if lowered == "dateadd" and len(args) == 3:
+        unit = _normalize_polars_duration_unit(raw_args[0])
+        return f"({args[2]} + {_polars_duration_expression(unit, args[1])})"
+    if lowered == "datediff" and len(args) == 3:
+        unit = _normalize_polars_duration_unit(raw_args[0])
+        return f"({args[2]} - {args[1]}).dt.{_polars_total_duration_method(unit)}()"
+    if lowered == "datepart" and len(args) == 2:
+        return _rewrite_polars_date_part(raw_args[0], args[1])
+    if lowered == "isoweek" and len(args) == 1:
+        return f"{args[0]}.dt.week()"
+    if lowered == "isoyear" and len(args) == 1:
+        return f"{args[0]}.dt.iso_year()"
+    if lowered == "yearandweek" and len(args) == 1:
+        return f"{args[0]}.dt.strftime('%G-%V')"
+    if lowered == "toepochseconds" and len(args) == 1:
+        return f"{args[0]}.dt.epoch('s')"
+    if lowered == "toepochmilliseconds" and len(args) == 1:
+        return f"{args[0]}.dt.epoch('ms')"
+    if lowered == "fromepochseconds" and len(args) == 1:
+        return f"pl.from_epoch({args[0]}, time_unit='s')"
+    if lowered == "fromepochmilliseconds" and len(args) == 1:
+        return f"pl.from_epoch({args[0]}, time_unit='ms')"
+    if lowered in {"days", "hours", "minutes", "seconds", "milliseconds"} and len(args) == 1:
+        return _polars_duration_expression(lowered[:-1] if lowered != "milliseconds" else "millisecond", args[0])
+    if lowered in {"totaldays", "totalhours", "totalminutes", "totalseconds", "totalmilliseconds"} and len(args) == 1:
+        return f"{args[0]}.dt.{_polars_total_function_method(lowered)}()"
+    if lowered == "rand" and len(args) <= 1:
+        return "(pl.int_range(0, pl.len()).shuffle().cast(pl.Float64) / pl.len())"
+    if lowered == "randbetween" and len(args) >= 2:
+        return f"((pl.int_range(0, pl.len()).shuffle() % (({args[1]}) - ({args[0]}) + 1)) + ({args[0]}))"
+    if lowered == "denserank" and args:
+        return _rewrite_polars_rank_function("dense", args, raw_args)
+    if lowered == "rankreal" and args:
+        return _rewrite_polars_rank_function("average", args, raw_args)
+    if lowered == "len" and len(args) == 1:
+        return f"{args[0]}.str.len_chars()"
+    if lowered == "right" and len(args) == 2:
+        return f"{args[0]}.str.slice(-({args[1]}))"
+    if lowered == "mid" and len(args) == 3:
+        return f"{args[0]}.str.slice(({args[1]}) - 1, {args[2]})"
+    if lowered == "substitute" and len(args) == 3:
+        return f"{args[0]}.str.replace_all({_polars_plain_literal(raw_args[1])}, {_polars_plain_literal(raw_args[2])}, literal=True)"
+    if lowered in {"find", "charindex"} and len(args) == 2:
+        position = f"{args[1]}.str.find({_polars_plain_literal(raw_args[0])})"
+        return f"pl.when({position}.is_null()).then(pl.lit(0)).otherwise({position} + 1)"
+    if lowered in {"find", "charindex"} and len(args) == 3:
+        sliced = f"{args[1]}.str.slice(({args[2]}) - 1)"
+        relative = f"{sliced}.str.find({_polars_plain_literal(raw_args[0])})"
+        return f"pl.when({relative}.is_null()).then(pl.lit(0)).otherwise({relative} + {args[2]})"
+    if lowered == "rxextract" and len(args) in {2, 3}:
+        group_index = args[2] if len(args) == 3 else "1"
+        return f"{args[0]}.str.extract({_polars_plain_literal(raw_args[1])}, group_index={group_index})"
+    if lowered == "rxreplace" and len(args) >= 3:
+        return f"{args[0]}.str.replace_all({_polars_plain_literal(raw_args[1])}, {_polars_plain_literal(raw_args[2])})"
+    if lowered == "split" and len(args) == 2:
+        return f"{args[0]}.str.split({_polars_plain_literal(raw_args[1])})"
+    if lowered == "split" and len(args) == 3:
+        index = _parse_numeric_literal(raw_args[2].strip())
+        polars_index = repr(int(index) - 1) if index is not None else f"({args[2]} - 1)"
+        return f"{args[0]}.str.split({_polars_plain_literal(raw_args[1])}).list.get({polars_index})"
+    if lowered == "concatenate" and args:
+        return "pl.concat_str([" + ", ".join(args) + "])"
+    return f"{lowered}({', '.join(args)})"
+
+
+def _normalize_polars_cast_type(value: str) -> str:
+    normalized = re.sub(r"\s+", "", value.strip().lower())
+    type_map = {
+        "int": "pl.Int64",
+        "integer": "pl.Int64",
+        "long": "pl.Int64",
+        "longinteger": "pl.Int64",
+        "real": "pl.Float64",
+        "double": "pl.Float64",
+        "single": "pl.Float32",
+        "singlereal": "pl.Float32",
+        "decimal": "pl.Decimal(38, 10)",
+        "currency": "pl.Decimal(38, 10)",
+        "string": "pl.String",
+        "varchar": "pl.String",
+        "date": "pl.Date",
+        "datetime": "pl.Datetime",
+        "timestamp": "pl.Datetime",
+        "time": "pl.Time",
+        "boolean": "pl.Boolean",
+        "bool": "pl.Boolean",
+    }
+    return type_map.get(normalized, value.strip())
+
+
+def _polars_function_cast_target(function_name: str) -> str | None:
+    return {
+        "integer": "pl.Int64",
+        "longinteger": "pl.Int64",
+        "real": "pl.Float64",
+        "single": "pl.Float32",
+        "singlereal": "pl.Float32",
+        "decimal": "pl.Decimal(38, 10)",
+        "currency": "pl.Decimal(38, 10)",
+        "string": "pl.String",
+        "date": "pl.Date",
+        "datetime": "pl.Datetime",
+        "time": "pl.Time",
+        "boolean": "pl.Boolean",
+    }.get(function_name)
+
+
+def _rewrite_polars_date_part(raw_unit: str, value_expr: str) -> str:
+    unit = _normalize_date_part_literal(_polars_plain_literal(raw_unit)).strip("'\"").lower()
+    methods = {
+        "year": "year",
+        "yyyy": "year",
+        "month": "month",
+        "mm": "month",
+        "day": "day",
+        "dd": "day",
+        "hour": "hour",
+        "hh": "hour",
+        "minute": "minute",
+        "mi": "minute",
+        "second": "second",
+        "ss": "second",
+        "week": "week",
+        "quarter": "quarter",
+    }
+    method = methods.get(unit)
+    if method is None:
+        return f"{value_expr}.dt.{unit}()"
+    return f"{value_expr}.dt.{method}()"
+
+
+def _normalize_polars_duration_unit(raw_unit: str) -> str:
+    unit = _normalize_date_part_literal(_polars_plain_literal(raw_unit)).strip("'\"").lower()
+    unit_map = {
+        "day": "day",
+        "days": "day",
+        "dd": "day",
+        "hour": "hour",
+        "hours": "hour",
+        "hh": "hour",
+        "minute": "minute",
+        "minutes": "minute",
+        "mi": "minute",
+        "second": "second",
+        "seconds": "second",
+        "ss": "second",
+        "millisecond": "millisecond",
+        "milliseconds": "millisecond",
+        "ms": "millisecond",
+    }
+    try:
+        return unit_map[unit]
+    except KeyError as exc:
+        raise ValueError(
+            "Polars backend supports DateAdd/DateDiff only for "
+            "day, hour, minute, second, and millisecond units"
+        ) from exc
+
+
+def _polars_duration_expression(unit: str, amount_expr: str) -> str:
+    keyword = {
+        "day": "days",
+        "hour": "hours",
+        "minute": "minutes",
+        "second": "seconds",
+        "millisecond": "milliseconds",
+    }[unit]
+    return f"pl.duration({keyword}={amount_expr})"
+
+
+def _polars_total_duration_method(unit: str) -> str:
+    return {
+        "day": "total_days",
+        "hour": "total_hours",
+        "minute": "total_minutes",
+        "second": "total_seconds",
+        "millisecond": "total_milliseconds",
+    }[unit]
+
+
+def _polars_total_function_method(function_name: str) -> str:
+    return {
+        "totaldays": "total_days",
+        "totalhours": "total_hours",
+        "totalminutes": "total_minutes",
+        "totalseconds": "total_seconds",
+        "totalmilliseconds": "total_milliseconds",
+    }[function_name]
+
+
+def _polars_iqr_expr(value_expr: str) -> str:
+    return (
+        f"({value_expr}.quantile(0.75, interpolation='linear') - "
+        f"{value_expr}.quantile(0.25, interpolation='linear'))"
+    )
+
+
+def _polars_lif_expr(value_expr: str) -> str:
+    return f"({value_expr}.quantile(0.25, interpolation='linear') - 1.5 * {_polars_iqr_expr(value_expr)})"
+
+
+def _polars_uif_expr(value_expr: str) -> str:
+    return f"({value_expr}.quantile(0.75, interpolation='linear') + 1.5 * {_polars_iqr_expr(value_expr)})"
+
+
+def _polars_outlier_predicate(value_expr: str) -> str:
+    return f"(({value_expr} < {_polars_lif_expr(value_expr)}) | ({value_expr} > {_polars_uif_expr(value_expr)}))"
+
+
+def _rewrite_polars_rank_function(method: str, args: list[str], raw_args: list[str]) -> str:
+    direction = "False"
+    partition_args: list[str] = []
+    for raw_arg, arg in zip(raw_args[1:], args[1:]):
+        literal = _strip_spotfire_literal(raw_arg)
+        if literal is None:
+            partition_args.append(_polars_partition_argument(raw_arg))
+            continue
+        normalized = literal.strip().lower()
+        if normalized in {"asc", "ascending"}:
+            direction = "False"
+        elif normalized in {"desc", "descending"}:
+            direction = "True"
+        elif not normalized.startswith("ties.method="):
+            partition_args.append(arg)
+    expression = f"{args[0]}.rank(method='{method}', descending={direction})"
+    if partition_args:
+        expression = f"{expression}.over({', '.join(partition_args)})"
+    return expression
+
+
+def _strip_spotfire_literal(value: str) -> str | None:
+    stripped = value.strip()
+    if stripped.startswith("'") and stripped.endswith("'"):
+        return _strip_sql_string_literal(stripped)
+    if stripped.startswith('"') and stripped.endswith('"'):
+        return stripped[1:-1].replace('""', '"')
+    return None
+
+
+def _apply_polars_over(expression: str, partition_args: list[str]) -> str:
+    if not partition_args:
+        return expression
+    return f"{expression}.over({', '.join(_polars_partition_argument(arg) for arg in partition_args)})"
+
+
+def _polars_partition_argument(argument: str) -> str:
+    stripped = argument.strip()
+    if stripped.startswith('"') and stripped.endswith('"'):
+        return _python_string_literal(stripped[1:-1].replace('""', '"'))
+    if stripped.startswith("["):
+        identifier, end_index = _read_bracket_identifier(stripped, 0)
+        if end_index == len(stripped):
+            return _python_string_literal(identifier)
+    return _rewrite_expression_for_polars(stripped)
+
+
+def _rewrite_case_expression_for_polars(expression: str) -> str:
+    body = expression.strip()[4:].strip()
+    if _word_at_end(body, "end"):
+        body = body[:-3].strip()
+    cases: list[tuple[str, str]] = []
+    else_expr = "pl.lit(None)"
+    cursor = 0
+    while True:
+        when_start = _find_top_level_keyword(body, "when", cursor)
+        if when_start is None:
+            else_start = _find_top_level_keyword(body, "else", cursor)
+            if else_start is not None:
+                else_expr = _rewrite_expression_for_polars(body[else_start + 4 :].strip())
+            break
+        then_start = _find_top_level_keyword(body, "then", when_start + 4)
+        if then_start is None:
+            raise ValueError(f"CASE expression missing THEN: {expression}")
+        next_when = _find_top_level_keyword(body, "when", then_start + 4)
+        next_else = _find_top_level_keyword(body, "else", then_start + 4)
+        value_end_candidates = [item for item in [next_when, next_else] if item is not None]
+        value_end = min(value_end_candidates) if value_end_candidates else len(body)
+        condition = body[when_start + 4 : then_start].strip()
+        value = body[then_start + 4 : value_end].strip()
+        cases.append((_rewrite_expression_for_polars(condition), _rewrite_expression_for_polars(value)))
+        if next_else is not None and (next_when is None or next_else < next_when):
+            else_expr = _rewrite_expression_for_polars(body[next_else + 4 :].strip())
+            break
+        cursor = value_end
+    if not cases:
+        raise ValueError(f"CASE expression has no WHEN clauses: {expression}")
+    result = f"pl.when({cases[0][0]}).then({cases[0][1]})"
+    for condition, value in cases[1:]:
+        result += f".when({condition}).then({value})"
+    return result + f".otherwise({else_expr})"
+
+
+def _strip_outer_parentheses(expression: str) -> str:
+    stripped = expression.strip()
+    while stripped.startswith("(") and stripped.endswith(")"):
+        try:
+            _inner, end_index = _read_parenthesized(stripped, 0)
+        except ValueError:
+            break
+        if end_index != len(stripped):
+            break
+        stripped = stripped[1:-1].strip()
+    return stripped
+
+
+def _word_at_end(expression: str, word: str) -> bool:
+    return re.search(rf"\b{re.escape(word)}\s*$", expression, flags=re.IGNORECASE) is not None
+
+
+def _strip_leading_word(expression: str, word: str) -> str | None:
+    match = re.match(rf"\s*{re.escape(word)}\b(?P<tail>.*)$", expression, flags=re.IGNORECASE | re.DOTALL)
+    return match.group("tail").strip() if match else None
+
+
+def _split_top_level_word_operator(expression: str, operator: str) -> tuple[str, str] | None:
+    index = _find_top_level_keyword(expression, operator)
+    if index is None:
+        return None
+    return expression[:index].strip(), expression[index + len(operator) :].strip()
+
+
+def _split_top_level_symbol_operator(
+    expression: str,
+    operators: list[str],
+    *,
+    scan_right: bool = False,
+) -> tuple[str, str, str] | None:
+    ranges = range(len(expression) - 1, -1, -1) if scan_right else range(len(expression))
+    for index in ranges:
+        if not _is_top_level_position(expression, index):
+            continue
+        for operator in sorted(operators, key=len, reverse=True):
+            if expression.startswith(operator, index):
+                if operator in {"+", "-"} and _is_unary_numeric_sign(expression, index):
+                    continue
+                return expression[:index].strip(), operator, expression[index + len(operator) :].strip()
+    return None
+
+
+def _split_top_level_symbol_chain(expression: str, operator: str) -> list[str] | None:
+    parts: list[str] = []
+    cursor = 0
+    index = 0
+    while index < len(expression):
+        if expression.startswith(operator, index) and _is_top_level_position(expression, index):
+            parts.append(expression[cursor:index].strip())
+            cursor = index + len(operator)
+            index = cursor
+            continue
+        index += 1
+    if not parts:
+        return None
+    parts.append(expression[cursor:].strip())
+    return parts
+
+
+def _find_top_level_keyword(expression: str, keyword: str, start: int = 0) -> int | None:
+    lowered = keyword.lower()
+    index = start
+    while index < len(expression):
+        if not _is_top_level_position(expression, index):
+            index += 1
+            continue
+        if expression[index : index + len(keyword)].lower() == lowered:
+            before = expression[index - 1] if index > 0 else " "
+            after_index = index + len(keyword)
+            after = expression[after_index] if after_index < len(expression) else " "
+            if not (before.isalnum() or before == "_") and not (after.isalnum() or after == "_"):
+                return index
+        index += 1
+    return None
+
+
+def _is_top_level_position(expression: str, target_index: int) -> bool:
+    depth = 0
+    index = 0
+    while index < target_index:
+        char = expression[index]
+        if char == "'":
+            _literal, index = _read_single_quoted_literal(expression, index)
+            continue
+        if char == '"':
+            _quoted, index = _read_double_quoted_segment(expression, index)
+            continue
+        if char == "[":
+            _identifier, index = _read_bracket_identifier(expression, index)
+            continue
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(depth - 1, 0)
+        index += 1
+    return depth == 0
+
+
+def _is_unary_numeric_sign(expression: str, index: int) -> bool:
+    if expression[index] not in {"+", "-"}:
+        return False
+    previous = expression[:index].rstrip()
+    if not previous:
+        return True
+    return previous[-1] in "([,+-*/<>=~"
+
+
+def _rewrite_polars_list_literal(expression: str) -> str:
+    stripped = expression.strip()
+    if stripped.startswith("(") and stripped.endswith(")"):
+        inner, end_index = _read_parenthesized(stripped, 0)
+        if end_index == len(stripped):
+            values = [_polars_plain_literal(item) for item in _split_top_level_arguments(inner)]
+            return "[" + ", ".join(values) + "]"
+    return _rewrite_expression_for_polars(stripped)
+
+
+def _polars_plain_literal(expression: str) -> str:
+    stripped = expression.strip()
+    if stripped.startswith("'") and stripped.endswith("'"):
+        return _python_string_literal(_strip_sql_string_literal(stripped) or "")
+    if stripped.startswith('"') and stripped.endswith('"'):
+        return _python_string_literal(stripped[1:-1].replace('""', '"'))
+    if stripped.lower() == "null":
+        return "None"
+    if stripped.lower() == "true":
+        return "True"
+    if stripped.lower() == "false":
+        return "False"
+    return stripped
+
+
+def _python_string_literal(value: str) -> str:
+    return repr(value)
 
 
 def _rewrite_expression_for_duckdb(expression: str) -> str:
@@ -796,6 +1817,10 @@ def _rewrite_function_call_for_duckdb(function_name: str, args: list[str]) -> st
         return f"string_split({args[0]}, {args[1]})"
     if lowered == "split" and len(args) == 3:
         return f"list_extract(string_split({args[0]}, {args[1]}), {args[2]})"
+    if lowered == "len" and len(args) == 1:
+        return f"length({args[0]})"
+    if lowered == "right" and len(args) == 2:
+        return f"right({args[0]}, {args[1]})"
     if lowered == "mid" and len(args) == 3:
         return f"substr({args[0]}, {args[1]}, {args[2]})"
     if lowered == "substitute" and len(args) == 3:

@@ -9,6 +9,7 @@ description = "Normalize Spotfire expressions into DuckDB-compatible SQL."
 requires-python = ">=3.10"
 dependencies = [
     "duckdb>=1.5.0,<2.0.0",
+    "polars>=1.31.0,<2.0.0",
     "PyYAML>=6.0.3,<7.0.0",
 ]
 
